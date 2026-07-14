@@ -107,13 +107,15 @@ Five cells, run sequentially so each engine gets the whole envelope to itself:
 
 1. **Flink append** — `IcebergSink`, `bucket(24, user_id)`
 2. **Spark append** — DSv2 streaming writer, same partitioning
-3. **Flink upsert (DV)** — native `.upsert()` + equality columns → **deletion vectors** (v3)
+3. **Flink upsert (DV)** — native `.upsert()` + equality columns
 4. **Spark upsert (MoR)** — `MERGE INTO` with `write.merge.mode = merge-on-read`
 5. **Spark upsert (CoW)** — `MERGE INTO` with `merge.mode = copy-on-write`
 
-We test both Spark upsert modes deliberately: merge-on-read (deletion vectors, the
-fair comparison to Flink) *and* copy-on-write (the naive default), so Spark gets
-its best shot and we see the cost of the default.
+All three upsert cells run on **Iceberg format v3**, so Flink's native upsert and
+Spark's merge-on-read produce the *same* thing on disk — **deletion vectors**. This
+matters: it's not "Flink's shiny DVs vs Spark's old rewrite." Merge-on-read is
+Spark's best shot and a like-for-like comparison to Flink; copy-on-write (the naive
+default, which rewrites whole files) is included to show what the default costs.
 
 ---
 

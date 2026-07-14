@@ -22,12 +22,12 @@
   .kicker{ color:var(--spark); font-weight:800; font-size:19px; letter-spacing:.14em; text-transform:uppercase; }
   h1{ font-size:66px; line-height:1.04; font-weight:900; letter-spacing:-.02em; margin-top:14px; }
   h1 .g{ color:var(--flink); }
-  .finding{ font-size:30px; font-weight:800; letter-spacing:-.01em; margin-top:18px; color:var(--ink); }
+  .finding{ font-size:29px; font-weight:800; letter-spacing:-.01em; margin-top:14px; color:var(--ink); }
   .finding .fg{ color:var(--flink); }
-  .sub{ color:var(--muted); font-size:22px; line-height:1.45; margin-top:12px; font-weight:400; max-width:900px; }
-  .legend{ display:flex; gap:34px; margin-top:26px; font-size:20px; font-weight:600; align-items:center; }
+  .sub{ color:var(--muted); font-size:21px; line-height:1.4; margin-top:10px; font-weight:400; max-width:920px; }
+  .legend{ display:flex; gap:34px; margin-top:20px; font-size:20px; font-weight:600; align-items:center; }
   .legend .dot{ display:inline-block; width:16px; height:16px; border-radius:4px; margin-right:9px; vertical-align:-1px; }
-  .sec{ margin-top:24px; }
+  .sec{ margin-top:20px; }
   .sec h2{ font-size:27px; font-weight:800; letter-spacing:-.01em; }
   .sec h2 .n{ color:var(--spark); }
   .sec .cap{ color:var(--muted); font-size:18px; margin-top:3px; font-weight:400; }
@@ -47,7 +47,7 @@
   .foot .l b{ color:var(--muted); }
   .foot .brand{ font-size:27px; font-weight:800; color:var(--ink); }
   .foot .brand .v{ color:var(--spark); }
-  .kicker-line{ color:var(--flink); font-weight:800; font-size:24px; margin-top:26px; }
+  .kicker-line{ color:var(--flink); font-weight:800; font-size:24px; margin-top:20px; }
 </style>
 </head>
 <body>
@@ -77,7 +77,7 @@
   <!-- 2. UPSERT -->
   <div class="sec">
     <h2><span class="n">2.</span> Upsert — Flink holds, Spark falls behind</h2>
-    <div class="cap">Keyed upsert at 100k in. Flink uses deletion vectors; Spark uses MERGE.</div>
+    <div class="cap">Keyed upsert at 100k in, all on Iceberg v3 deletion vectors — Flink native upsert vs Spark MERGE (MoR &amp; CoW).</div>
     <div class="row"><span class="lbl">Flink · DV</span>
       <div class="bar f" style="width:77%">97,795 /s<span class="verdict keep">KEEPS UP</span></div></div>
     <div class="row"><span class="lbl">Spark · MoR</span>
