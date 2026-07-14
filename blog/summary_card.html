@@ -27,13 +27,13 @@
   .sub{ color:var(--muted); font-size:22px; line-height:1.45; margin-top:12px; font-weight:400; max-width:900px; }
   .legend{ display:flex; gap:34px; margin-top:26px; font-size:20px; font-weight:600; align-items:center; }
   .legend .dot{ display:inline-block; width:16px; height:16px; border-radius:4px; margin-right:9px; vertical-align:-1px; }
-  .sec{ margin-top:30px; }
+  .sec{ margin-top:24px; }
   .sec h2{ font-size:27px; font-weight:800; letter-spacing:-.01em; }
   .sec h2 .n{ color:var(--spark); }
   .sec .cap{ color:var(--muted); font-size:18px; margin-top:3px; font-weight:400; }
-  .row{ display:flex; align-items:center; gap:16px; margin-top:13px; }
-  .row .lbl{ width:150px; font-size:19px; color:var(--ink); font-weight:600; text-align:right; flex-shrink:0; }
-  .bar{ height:38px; border-radius:8px; display:flex; align-items:center; padding:0 15px; font-weight:800; font-size:19px; color:#10192a; white-space:nowrap; }
+  .row{ display:flex; align-items:center; gap:16px; margin-top:10px; }
+  .row .lbl{ width:168px; font-size:19px; color:var(--ink); font-weight:600; text-align:right; flex-shrink:0; }
+  .bar{ height:36px; border-radius:8px; display:flex; align-items:center; padding:0 15px; font-weight:800; font-size:19px; color:#10192a; white-space:nowrap; }
   .bar.s{ background:var(--spark); color:#3a2400; }
   .bar.f{ background:var(--flink); color:#0a1f33; }
   .bar.sd{ background:linear-gradient(90deg,var(--spark) 0%, var(--spark) 100%); }
@@ -91,14 +91,16 @@
   <div class="sec">
     <h2><span class="n">3.</span> The cost of keeping up — memory</h2>
     <div class="row"><span class="lbl">Flink append</span>
-      <div class="bar f" style="width:55%">~17 GB</div></div>
-    <div class="row"><span class="lbl">Flink upsert</span>
+      <div class="bar f" style="width:54%">~17 GB</div></div>
+    <div class="row"><span class="lbl">Flink upsert · DV</span>
       <div class="bar f" style="width:55%">~17 GB</div></div>
     <div class="row"><span class="lbl">Spark append</span>
-      <div class="bar s" style="width:65%">~20 GB</div></div>
-    <div class="row"><span class="lbl">Spark upsert</span>
+      <div class="bar s" style="width:64%">~20 GB</div></div>
+    <div class="row"><span class="lbl">Spark upsert · MoR</span>
       <div class="bar s" style="width:100%">~31 GB &nbsp;— buffering the backlog</div></div>
-    <div class="note">Flink holds <b>~17 GB</b> flat, append or upsert. Spark runs hotter and pins <b>~31 GB</b> on upsert as its backlog piles up in the heap.</div>
+    <div class="row"><span class="lbl">Spark upsert · CoW</span>
+      <div class="bar s" style="width:97%">~30 GB</div></div>
+    <div class="note">Flink holds <b>~17 GB</b> flat, append or upsert. Both Spark upsert modes pin <b>~30&ndash;31 GB</b> as their backlog piles up in the heap.</div>
   </div>
 
   <!-- 4. WHERE THE TIME GOES -->
