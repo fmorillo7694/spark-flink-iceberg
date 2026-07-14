@@ -90,13 +90,15 @@
   <!-- 3. MEMORY -->
   <div class="sec">
     <h2><span class="n">3.</span> The cost of keeping up — memory</h2>
-    <div class="row"><span class="lbl">Spark append</span>
-      <div class="bar s" style="width:64%">~20 GB</div></div>
     <div class="row"><span class="lbl">Flink append</span>
-      <div class="bar f" style="width:54%">~17 GB</div></div>
+      <div class="bar f" style="width:55%">~17 GB</div></div>
+    <div class="row"><span class="lbl">Flink upsert</span>
+      <div class="bar f" style="width:55%">~17 GB</div></div>
+    <div class="row"><span class="lbl">Spark append</span>
+      <div class="bar s" style="width:65%">~20 GB</div></div>
     <div class="row"><span class="lbl">Spark upsert</span>
       <div class="bar s" style="width:100%">~31 GB &nbsp;— buffering the backlog</div></div>
-    <div class="note">Same envelope: Spark runs hotter on memory and pins <b>~31 GB</b> on upsert as its backlog piles up in the heap.</div>
+    <div class="note">Flink holds <b>~17 GB</b> flat, append or upsert. Spark runs hotter and pins <b>~31 GB</b> on upsert as its backlog piles up in the heap.</div>
   </div>
 
   <!-- 4. WHERE THE TIME GOES -->
