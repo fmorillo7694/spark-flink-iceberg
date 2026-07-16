@@ -124,7 +124,48 @@ public final class IcebergIngestJob {
         }
         builder.append();
 
-        env.execute("flink-datastream-iceberg-ingest[" + mode + (upsert ? ",upsert" : "") + "]");
+        // INLINE table maintenance — embedded in THIS ingest job's env (single
+        // env.execute), matching the AWS sample DataStreamIcebergJob. Compaction runs
+        // in the same job graph, so it SHARES the ingest job's slots (the fair contrast
+        // to Spark's separate spark-submit). forTable(env, tableLoader) with NO lock
+        // factory → Iceberg's Flink COORDINATOR lock (state-based, PR#15151) — no
+        // JDBC/ZooKeeper needed. Gated by FLINK_INLINE_MAINT=1 so we can A/B against
+        // the no-maintenance baseline.
+        if ("1".equals(System.getenv().getOrDefault("FLINK_INLINE_MAINT", "0"))) {
+            setupInlineMaintenance(env, tableLoader);
+        }
+
+        env.execute("flink-datastream-iceberg-ingest[" + mode + (upsert ? ",upsert" : "")
+                + (System.getenv().getOrDefault("FLINK_INLINE_MAINT", "0").equals("1") ? ",inline-maint" : "") + "]");
+    }
+
+    /**
+     * Attach Iceberg TableMaintenance operators to the ingest env (shared resources).
+     * Triggers are commit/file-count based (per AWS sample) so a streaming table that
+     * accrues delete-file debt gets continuously compacted in-job.
+     */
+    private static void setupInlineMaintenance(StreamExecutionEnvironment env, TableLoader tableLoader) throws Exception {
+        int rewriteFileCount = Integer.parseInt(System.getenv().getOrDefault("MAINT_REWRITE_FILE_COUNT", "20"));
+        int expireCommits = Integer.parseInt(System.getenv().getOrDefault("MAINT_EXPIRE_COMMITS", "10"));
+        int retainLast = Integer.parseInt(System.getenv().getOrDefault("MAINT_RETAIN_LAST", "5"));
+        // forTable(env, tableLoader) — 2-arg overload → coordinator lock (no external lock).
+        org.apache.iceberg.flink.maintenance.api.TableMaintenance
+                .forTable(env, tableLoader)
+                .uidSuffix("sfi-inline-maint")
+                .rateLimit(java.time.Duration.ofSeconds(10))
+                .add(org.apache.iceberg.flink.maintenance.api.RewriteDataFiles.builder()
+                        .scheduleOnDataFileCount(rewriteFileCount)
+                        .scheduleOnPosDeleteRecordCount(500_000)
+                        .deleteFileThreshold(1)
+                        .targetFileSizeBytes(128L * 1024 * 1024)
+                        .partialProgressEnabled(true)
+                        .partialProgressMaxCommits(5))
+                .add(org.apache.iceberg.flink.maintenance.api.ExpireSnapshots.builder()
+                        .scheduleOnCommitCount(expireCommits)
+                        .maxSnapshotAge(java.time.Duration.ofMinutes(30))
+                        .retainLast(retainLast)
+                        .cleanExpiredMetadata(true))
+                .append();
     }
 
     private static RowData parse(String json) throws Exception {
@@ -152,7 +193,7 @@ public final class IcebergIngestJob {
      * CATALOG_TYPE=glue (or pass --catalog-uri glue) to use AWS Glue + real S3.
      * The rest of the job is identical — this is the only local↔cloud binding.
      */
-    private static CatalogLoader restCatalog(String uri, String warehouse) {
+    static CatalogLoader restCatalog(String uri, String warehouse) {  // package-private: reused by FlinkMaintenanceJob
         String catalogType = System.getenv().getOrDefault("CATALOG_TYPE", "rest");
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
 

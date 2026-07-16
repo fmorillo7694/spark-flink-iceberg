@@ -1,5 +1,7 @@
 package com.benchmark
 
+import java.util.concurrent.{Executors, Semaphore}
+
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -93,6 +95,24 @@ object IcebergIngestJob {
     val spark = builder.getOrCreate()
     import spark.implicits._
 
+    // ── Storage-Partitioned Join (SPJ) for the upsert MERGE ──────────────────
+    // The target table is bucket(N, user_id) and the MERGE key is user_id, so the
+    // target is ALREADY laid out by the join key. With SPJ on, Spark can co-partition
+    // the source micro-batch to the target's bucketing and skip the full shuffle-to-
+    // target on every batch. These are session-level SQL configs (safe to set in
+    // code even under CONFIG_FROM_MANIFEST). Toggle with SPJ=1 to measure the delta.
+    //   NOTE: our internal "autospj" auto-invokes this at the engine layer (source
+    //   auto-partitioned to the target spec). Here we enable the OSS-available knobs
+    //   + explicitly pre-cluster the source, which is the reproducible equivalent.
+    if (sys.env.getOrElse("SPJ", "0") == "1") {
+      spark.conf.set("spark.sql.sources.v2.bucketing.enabled", "true")
+      spark.conf.set("spark.sql.iceberg.planning.preserve-data-grouping", "true")
+      spark.conf.set("spark.sql.sources.v2.bucketing.pushPartValues.enabled", "true")
+      spark.conf.set("spark.sql.requireAllClusterKeysForCoPartition", "false")
+      spark.conf.set("spark.sql.sources.v2.bucketing.partiallyClusteredDistribution.enabled", "true")
+    }
+    val spjEnabled = sys.env.getOrElse("SPJ", "0") == "1"
+
     val fqTable = s"demo.$db.$table"
     spark.sql(s"CREATE DATABASE IF NOT EXISTS demo.$db")
     // Clean per-run state: drop+recreate the table so each run measures only its
@@ -154,19 +174,73 @@ object IcebergIngestJob {
       // equality key Flink's .upsert() uses, so the two are comparable. Iceberg
       // MERGE errors if >1 source row matches one target row, so we dedup the
       // batch to the latest event per user_id (highest ingest_ts) first.
+      // In-submit compaction modes — modeled on AWS's iceberg-streaming-examples
+      // (SparkCustomIcebergIngest: compaction=none|inline|scheduled). Spark has NO
+      // in-query maintenance operator like Flink, so the options are:
+      //   none      — no in-submit compaction (baseline; use a separate scheduled job,
+      //               which AWS calls the RECOMMENDED production baseline — our compact_spark.sh)
+      //   inline    — run compaction inside foreachBatch every N batches. Simple, but
+      //               SYNCHRONOUS → lengthens those batches / stalls ingest.
+      //   scheduled — background ScheduledExecutorService fires compaction on a timer,
+      //               concurrent with ingest on the SAME submit's executors (still
+      //               competes with the writer, but doesn't block the batch).
+      // Every maintenance call is guarded (a failed compaction must NEVER kill ingest).
+      val compactMode = sys.env.getOrElse("SPARK_COMPACTION", "none")   // none|inline|scheduled
+      val maintEvery = sys.env.getOrElse("SPARK_INLINE_EVERY", "10").toInt
+      val maintExpire = sys.env.getOrElse("SPARK_MAINT_EXPIRE", "1") == "1"
+      val maintGate = new Semaphore(1)  // at most one compaction in flight (drop overlaps)
+      def runMaintenance(s: SparkSession, why: String): Unit = {
+        if (!maintGate.tryAcquire()) return  // previous compaction still running — skip
+        try {
+          s.sql(s"CALL demo.system.rewrite_data_files(table => '$db.$table', options => map('min-input-files','2'))")
+          s.sql(s"CALL demo.system.rewrite_position_delete_files(table => '$db.$table')")
+          if (maintExpire) s.sql(s"CALL demo.system.expire_snapshots(table => '$db.$table', retain_last => 5)")
+        } catch {
+          case e: Throwable => System.err.println(s"[maint:$why] failed (ingest continues): ${e.getMessage}")
+        } finally maintGate.release()
+      }
+      // scheduled mode: background timer thread on the driver, concurrent with ingest.
+      val scheduler: java.util.concurrent.ScheduledExecutorService =
+        if (compactMode == "scheduled") {
+          val sc = Executors.newSingleThreadScheduledExecutor((r: Runnable) => {
+            val th = new Thread(r, "sfi-compaction"); th.setDaemon(true); th
+          })
+          val everySec = sys.env.getOrElse("SPARK_SCHEDULED_EVERY_SEC", "120").toLong
+          sc.scheduleAtFixedRate(() => runMaintenance(spark, "scheduled"), everySec, everySec,
+            java.util.concurrent.TimeUnit.SECONDS)
+          sc
+        } else null
       parsed.writeStream
-        .foreachBatch { (batch: DataFrame, _: Long) =>
+        .foreachBatch { (batch: DataFrame, batchId: Long) =>
           val deduped = batch
             .withColumn("_rn", row_number().over(
               Window.partitionBy("user_id").orderBy(col("ingest_ts").desc)))
             .filter(col("_rn") === 1).drop("_rn")
-          deduped.createOrReplaceTempView("updates")
+          // SPJ: cluster the source by the join key so the planner can co-partition
+          // it with the target's bucket(N, user_id) layout and skip the shuffle-to-
+          // target inside MERGE. We repartition by user_id into `buckets` partitions
+          // (matching the target bucket count); with preserve-data-grouping +
+          // v2.bucketing on, Spark's KeyGroupedPartitioning aligns this with the
+          // target's bucket transform. (NOTE: `bucket()` is an Iceberg DDL transform,
+          // not a DataFrame function — hash-repartitioning by the key is the correct
+          // OSS way to feed SPJ here.) Without SPJ this branch is skipped.
+          val src =
+            if (spjEnabled && partitioning != "time")
+              deduped.repartition(buckets.toInt, col("user_id"))
+            else deduped
+          src.createOrReplaceTempView("updates")
           batch.sparkSession.sql(
             s"""MERGE INTO $fqTable t
                |USING (SELECT * FROM updates) s
                |ON t.user_id = s.user_id
                |WHEN MATCHED THEN UPDATE SET *
                |WHEN NOT MATCHED THEN INSERT *""".stripMargin)
+
+          // inline mode: compact synchronously inside the batch every N batches
+          // (blocks the next batch — the AWS "simple but lengthens batches" pattern).
+          if (compactMode == "inline" && batchId > 0 && batchId % maintEvery == 0) {
+            runMaintenance(batch.sparkSession, s"inline@batch$batchId")
+          }
           () // foreachBatch requires a Unit-returning closure
         }
         .option("checkpointLocation", s"${checkpointBase}/$table")

@@ -9,7 +9,12 @@ set -a; source ../.env; set +a
 SB="${SCALA_BINARY:-2.13}"
 SV="${SPARK_VERSION:-4.1.2}"
 IV="${ICEBERG_VERSION:-1.11.0}"
-IM="4.0"   # iceberg-spark-runtime module for Spark 4.x
+# iceberg-spark-runtime module MUST match Spark's MAJOR.MINOR — derive it from
+# SPARK_VERSION so it can't drift. A mismatched runtime (e.g. 4.0 build on Spark
+# 4.1.2) throws NoSuchMethodError DataSourceV2Relation.create on expire_snapshots /
+# rewrite_manifests / compute_table_stats / DROP...PURGE — a version-pairing bug we
+# hit and fixed. iceberg publishes -4.1_, -4.0_, -3.5_ runtimes; pick by SV.
+IM="$(echo "$SV" | cut -d. -f1,2)"   # 4.1.2 -> 4.1
 
 mkdir -p jars && cd jars
 base=https://repo1.maven.org/maven2

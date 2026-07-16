@@ -45,6 +45,7 @@ TABLE="events"; [ "$ENGINE" = "spark" ] && TABLE="events_spark"
 LABEL="local_${ENGINE}_${WRITE}_bucket"
 if [ "$WRITE" = "upsert" ] && [ "$ENGINE" = "spark" ]; then
   case "$MERGE_MODE" in copy-on-write) LABEL="${LABEL}_cow";; *) LABEL="${LABEL}_mor";; esac
+  [ "${SPJ:-0}" = "1" ] && LABEL="${LABEL}_spj"   # distinct result files for SPJ before/after
 fi
 OUT="results/local/${LABEL}"
 mkdir -p results/local
@@ -119,6 +120,8 @@ sleep 8
 if [ "$ENGINE" = "flink" ]; then
   docker cp flink/datastream/target/flink-iceberg-bench.jar flink-jobmanager:/opt/flink/app.jar >/dev/null 2>&1
   docker exec -d -e STARTING_OFFSETS=latest -e BUCKETS="$BUCKETS" -e CHECKPOINT_INTERVAL_MS="$((COMMIT_S*1000))" \
+    -e FLINK_INLINE_MAINT="${FLINK_INLINE_MAINT:-0}" \
+    -e MAINT_REWRITE_FILE_COUNT="${MAINT_REWRITE_FILE_COUNT:-20}" -e MAINT_EXPIRE_COMMITS="${MAINT_EXPIRE_COMMITS:-10}" -e MAINT_RETAIN_LAST="${MAINT_RETAIN_LAST:-5}" \
     flink-jobmanager flink run -d -c com.benchmark.IcebergIngestJob /opt/flink/app.jar \
     --distribution-mode hash --upsert "$UPSERT" --partitioning bucket \
     --format-version "$FMT" --parallelism "$CORES" >/dev/null 2>&1
@@ -133,7 +136,9 @@ else
     -e AWS_ACCESS_KEY_ID=admin -e AWS_SECRET_ACCESS_KEY=password -e AWS_REGION=us-east-1 \
     -e WAREHOUSE_BUCKET=warehouse -e S3_ENDPOINT=http://minio:9000 \
     -e PARTITIONING=bucket -e TABLE_FORMAT_VERSION="$FMT" -e BUCKETS="$BUCKETS" \
-    -e STARTING_OFFSETS=latest -e WRITE_MERGE_MODE="$MERGE_MODE" \
+    -e STARTING_OFFSETS=latest -e WRITE_MERGE_MODE="$MERGE_MODE" -e SPJ="${SPJ:-0}" \
+    -e SPARK_COMPACTION="${SPARK_COMPACTION:-none}" -e SPARK_INLINE_EVERY="${SPARK_INLINE_EVERY:-10}" \
+    -e SPARK_SCHEDULED_EVERY_SEC="${SPARK_SCHEDULED_EVERY_SEC:-120}" -e SPARK_MAINT_EXPIRE="${SPARK_MAINT_EXPIRE:-1}" \
     spark bash -c "nohup /opt/spark/bin/spark-submit --master 'local[$CORES]' --driver-memory ${MEM_GB}g \
       --class com.benchmark.IcebergIngestJob --conf spark.sql.shuffle.partitions=$BUCKETS \
       /opt/spark/work-dir/app.jar --distribution-mode hash --upsert '$UPSERT' \
@@ -184,12 +189,17 @@ if curs:
     print("files=%d bytes=%d records=%d avg_mb=%.1f snapshots=%d"%(files,by,recs,(by/files/1e6) if files else 0,len(snaps)))
 out=os.environ["OUT"]
 with open(out+".snapshots.csv","w") as f:
-    f.write("idx,ts_ms,interval_s,op,added_records,added_files,added_size,commit_avg_mb,total_records,total_files\n")
+    # per-commit health: data + delete/DV files, so we can chart read-amplification
+    # (delete files piling up), target growth, and prove v3 deletion vectors (added_dvs).
+    f.write("idx,ts_ms,interval_s,op,added_records,added_files,added_size,commit_avg_mb,"
+            "total_records,total_files,added_delete_files,added_dvs,total_delete_files,total_position_deletes\n")
     prev=None
     for i,s in enumerate(snaps):
         su=s.get("summary",{}); ts=int(s.get("timestamp-ms",0)); iv=((ts-prev)/1000.0) if prev else 0.0; prev=ts
         af=g(su,"added-data-files"); asz=g(su,"added-files-size")
-        f.write("%d,%d,%.1f,%s,%d,%d,%d,%.1f,%d,%d\n"%(i,ts,iv,su.get("operation",""),g(su,"added-records"),af,asz,(asz/af/1e6) if af else 0,g(su,"total-records"),g(su,"total-data-files")))
+        f.write("%d,%d,%.1f,%s,%d,%d,%d,%.1f,%d,%d,%d,%d,%d,%d\n"%(i,ts,iv,su.get("operation",""),
+            g(su,"added-records"),af,asz,(asz/af/1e6) if af else 0,g(su,"total-records"),g(su,"total-data-files"),
+            g(su,"added-delete-files"),g(su,"added-dvs"),g(su,"total-delete-files"),g(su,"total-position-deletes")))
 ' > "${OUT}.files.txt" || true
 cat "${OUT}.files.txt" 2>/dev/null || true
 

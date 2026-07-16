@@ -193,16 +193,19 @@ if curs:
 # per commit, and avg file size of THAT commit. First snapshot ts is the baseline.
 out=os.environ["OUT"]
 with open(out+".snapshots.csv","w") as f:
-    f.write("idx,ts_ms,interval_s,op,added_records,added_files,added_size,commit_avg_mb,total_records,total_files\n")
+    # per-commit health: + delete/DV files for read-amplification & v3-DV proof
+    f.write("idx,ts_ms,interval_s,op,added_records,added_files,added_size,commit_avg_mb,"
+            "total_records,total_files,added_delete_files,added_dvs,total_delete_files,total_position_deletes\n")
     prev=None
     for i,s in enumerate(snaps):
         su=s.get("summary",{}); ts=int(s.get("timestamp-ms",0))
         iv=((ts-prev)/1000.0) if prev else 0.0; prev=ts
         af=g(su,"added-data-files"); asz=g(su,"added-files-size")
         cavg=(asz/af/1e6) if af else 0
-        f.write("%d,%d,%.1f,%s,%d,%d,%d,%.1f,%d,%d\n"%(
+        f.write("%d,%d,%.1f,%s,%d,%d,%d,%.1f,%d,%d,%d,%d,%d,%d\n"%(
             i,ts,iv,su.get("operation",""),g(su,"added-records"),af,asz,cavg,
-            g(su,"total-records"),g(su,"total-data-files")))
+            g(su,"total-records"),g(su,"total-data-files"),
+            g(su,"added-delete-files"),g(su,"added-dvs"),g(su,"total-delete-files"),g(su,"total-position-deletes")))
 ' > "${OUT}.files.txt" || true
 else
   aws s3 ls "s3://$BUCKET/streaming.db/$TABLE/data/" --recursive 2>/dev/null \
